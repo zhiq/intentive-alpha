@@ -1,0 +1,387 @@
+// Intentive — Prisma schema
+// AI-native intent-to-capacity market-making platform (alpha: massage/wellness)
+//
+// Design notes:
+// - All money is stored as integers in the smallest currency unit (sen for MYR)
+//   to avoid floating point drift. The domain layer exposes helpers.
+// - AI never writes here directly. Services validate AI JSON with Zod, then
+//   persist via these models.
+// - Status enums mirror the state machines in src/domain/state.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum UserRole {
+  USER
+  PROVIDER
+  ADMIN
+}
+
+enum FulfillmentMode {
+  HOME_SERVICE
+  VISIT_PROVIDER
+  EITHER
+  UNKNOWN
+}
+
+enum IntentStatus {
+  DRAFT
+  NEEDS_DETAILS
+  MARKET_ACTIONABLE
+  LIVE
+  OFFER_READY
+  ACCEPTED
+  EXPIRED
+  CANCELLED
+}
+
+enum LiveIntentStatus {
+  ACTIVE
+  PAUSED
+  EXPIRED
+  FULFILLED
+  CANCELLED
+}
+
+enum OfferStatus {
+  SUGGESTED
+  APPROVED
+  EDITED
+  SENT
+  DECLINED
+  ACCEPTED
+  REJECTED
+  EXPIRED
+}
+
+enum BookingStatus {
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+  DISPUTED
+}
+
+enum Urgency {
+  SAME_DAY
+  TODAY
+  THIS_WEEK
+  FLEXIBLE
+}
+
+// ---------------------------------------------------------------------------
+// Core identity
+// ---------------------------------------------------------------------------
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  email     String   @unique
+  role      UserRole @default(USER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  preferencePassport PreferencePassport?
+  ownedProviders     Provider[]          @relation("ProviderOwner")
+  intents            IntentObject[]
+  bookings           Booking[]
+  relationshipAssets RelationshipAsset[]
+  reliabilitySignals ReliabilitySignal[]
+
+  @@index([role])
+}
+
+model PreferencePassport {
+  id                     String   @id @default(cuid())
+  userId                 String   @unique
+  preferredAreas         String[] @default([])
+  preferredBudgetMin     Int? // sen
+  preferredBudgetMax     Int? // sen
+  preferredServiceStyles String[] @default([])
+  avoidPreferences       String[] @default([])
+  preferredProviderGender String?
+  defaultTravelRadiusKm  Float?
+  preferredFulfillmentMode FulfillmentMode @default(UNKNOWN)
+  notes                  String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ---------------------------------------------------------------------------
+// Provider supply
+// ---------------------------------------------------------------------------
+
+model Provider {
+  id                  String   @id @default(cuid())
+  ownerUserId         String
+  businessName        String
+  description         String?
+  baseLocation        String
+  latitude            Float
+  longitude           Float
+  serviceRadiusKm     Float    @default(10)
+  offersHomeService   Boolean  @default(false)
+  offersInStoreService Boolean @default(true)
+  rating              Float    @default(0)
+  responseTimeMinutes Int      @default(60)
+  reliabilityScore    Float    @default(0.7)
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  owner        User                  @relation("ProviderOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
+  services     ProviderService[]
+  availability ProviderAvailability[]
+  offerPolicies ProviderOfferPolicy[]
+  offers       OfferObject[]
+  bookings     Booking[]
+  relationshipAssets RelationshipAsset[]
+  reliabilitySignals ReliabilitySignal[]
+
+  @@index([ownerUserId])
+  @@index([isActive])
+}
+
+model ProviderService {
+  id              String  @id @default(cuid())
+  providerId      String
+  category        String  @default("massage_wellness")
+  serviceType     String
+  durationMinutes Int
+  basePrice       Int // sen
+  minPrice        Int // sen
+  maxPrice        Int // sen
+  description     String?
+  isActive        Boolean @default(true)
+
+  provider Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@index([providerId])
+  @@index([serviceType])
+}
+
+model ProviderAvailability {
+  id         String   @id @default(cuid())
+  providerId String
+  startTime  DateTime
+  endTime    DateTime
+  isBooked   Boolean  @default(false)
+  notes      String?
+
+  provider Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@index([providerId, startTime])
+  @@index([isBooked])
+}
+
+model ProviderOfferPolicy {
+  id                String   @id @default(cuid())
+  providerId        String
+  serviceType       String
+  minPrice          Int // sen
+  standardPrice     Int // sen
+  maxDiscountPercent Int     @default(0)
+  allowAddOns       Boolean  @default(false)
+  allowedAddOns     Json     @default("[]") // [{name, price, durationMinutes}]
+  requireDeposit    Boolean  @default(false)
+  depositPercent    Int      @default(0)
+  cancellationPolicy String  @default("Free cancellation up to 2 hours before.")
+  autoSuggestEnabled Boolean @default(true)
+  autoSendEnabled   Boolean  @default(false)
+  maxTravelRadiusKm Float    @default(10)
+  notes             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  provider Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, serviceType])
+  @@index([providerId])
+}
+
+// ---------------------------------------------------------------------------
+// Intent
+// ---------------------------------------------------------------------------
+
+model IntentObject {
+  id                    String          @id @default(cuid())
+  userId                String
+  rawInput              String
+  category              String          @default("massage_wellness")
+  serviceType           String?
+  desiredOutcome        String?
+  requestedStartTime    DateTime?
+  requestedEndTime      DateTime?
+  durationMinutes       Int?
+  locationText          String?
+  latitude              Float?
+  longitude             Float?
+  travelRadiusKm        Float?
+  fulfillmentMode       FulfillmentMode @default(UNKNOWN)
+  budgetMin             Int? // sen
+  budgetMax             Int? // sen
+  urgency               Urgency?
+  flexibilityTimeMinutes Int?
+  flexibilityBudgetPercent Int?
+  flexibilityTravelKm   Float?
+  preferencesJson       Json            @default("{}")
+  missingFieldsJson     Json            @default("[]")
+  confidenceJson        Json            @default("{}")
+  status                IntentStatus    @default(DRAFT)
+  expiresAt             DateTime?
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  liveIntent  LiveIntent?
+  traces      MarketOutcomeTrace[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+model LiveIntent {
+  id                   String           @id @default(cuid())
+  intentObjectId       String           @unique
+  status               LiveIntentStatus @default(ACTIVE)
+  providersInvitedCount Int             @default(0)
+  offersReceivedCount  Int              @default(0)
+  firstOfferAt         DateTime?
+  expiresAt            DateTime?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  intentObject IntentObject  @relation(fields: [intentObjectId], references: [id], onDelete: Cascade)
+  offers       OfferObject[]
+
+  @@index([status])
+}
+
+model OfferObject {
+  id                 String      @id @default(cuid())
+  liveIntentId       String
+  providerId         String
+  status             OfferStatus @default(SUGGESTED)
+  title              String
+  serviceType        String
+  startTime          DateTime
+  endTime            DateTime
+  durationMinutes    Int
+  price              Int // sen
+  currency           String      @default("MYR")
+  addOnsJson         Json        @default("[]")
+  depositRequired    Boolean     @default(false)
+  depositAmount      Int         @default(0) // sen
+  cancellationPolicy String
+  reasonedBrief      String
+  fitScore           Float       @default(0)
+  valueScore         Float       @default(0)
+  convenienceScore   Float       @default(0)
+  riskScore          Float       @default(0)
+  providerEditNotes  String?
+  availabilityId     String? // slot reserved by this offer, set on accept
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  liveIntent LiveIntent @relation(fields: [liveIntentId], references: [id], onDelete: Cascade)
+  provider   Provider   @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  booking    Booking?
+
+  @@index([liveIntentId])
+  @@index([providerId])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Booking & outcomes
+// ---------------------------------------------------------------------------
+
+model Booking {
+  id            String        @id @default(cuid())
+  offerObjectId String        @unique
+  userId        String
+  providerId    String
+  status        BookingStatus @default(CONFIRMED)
+  startTime     DateTime
+  endTime       DateTime
+  finalPrice    Int // sen
+  depositAmount Int           @default(0) // sen
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  offer    OfferObject @relation(fields: [offerObjectId], references: [id], onDelete: Cascade)
+  user     User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider Provider    @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  relationshipAssets RelationshipAsset[]
+
+  @@index([userId])
+  @@index([providerId])
+  @@index([status])
+}
+
+model RelationshipAsset {
+  id                  String   @id @default(cuid())
+  userId              String
+  providerId          String
+  lastBookingId       String?
+  usualServiceType    String?
+  usualDurationMinutes Int?
+  usualBudgetMin      Int? // sen
+  usualBudgetMax      Int? // sen
+  notes               String?
+  rebookingCount      Int      @default(0)
+  satisfactionScore   Float    @default(0)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider    Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  lastBooking Booking? @relation(fields: [lastBookingId], references: [id])
+
+  @@unique([userId, providerId])
+  @@index([userId])
+  @@index([providerId])
+}
+
+model ReliabilitySignal {
+  id          String   @id @default(cuid())
+  userId      String?
+  providerId  String?
+  signalType  String
+  signalValue Float
+  source      String
+  createdAt   DateTime @default(now())
+
+  user     User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider Provider? @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([providerId])
+  @@index([signalType])
+}
+
+model MarketOutcomeTrace {
+  id             String   @id @default(cuid())
+  intentObjectId String?
+  eventType      String
+  payloadJson    Json     @default("{}")
+  createdAt      DateTime @default(now())
+
+  intentObject IntentObject? @relation(fields: [intentObjectId], references: [id], onDelete: SetNull)
+
+  @@index([intentObjectId])
+  @@index([eventType])
+  @@index([createdAt])
+}
