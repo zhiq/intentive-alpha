@@ -51,7 +51,6 @@ export default async function IntentDetailPage({
   const cardData: IntentCardData = {
     id: intent.id,
     serviceType: intent.serviceType,
-    desiredOutcome: intent.desiredOutcome,
     requestedStartTimeISO: intent.requestedStartTime?.toISOString() ?? null,
     durationMinutes: intent.durationMinutes,
     locationText: intent.locationText,

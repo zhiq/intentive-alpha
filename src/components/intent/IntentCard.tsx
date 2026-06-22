@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { FulfillmentMode } from "@prisma/client";
 import {
@@ -20,7 +20,6 @@ import { MASSAGE_SERVICE_TYPES, type MandatoryField } from "@/domain/enums";
 export interface IntentCardData {
   id: string;
   serviceType: string | null;
-  desiredOutcome: string | null;
   requestedStartTimeISO: string | null;
   durationMinutes: number | null;
   locationText: string | null;
@@ -85,7 +84,9 @@ function senToRinggitInput(sen: number | null): string {
 function initialState(data: IntentCardData): FormState {
   return {
     serviceType: data.serviceType ?? "",
-    requestedStartTime: isoToLocalInput(data.requestedStartTimeISO),
+    // Filled client-side in an effect: datetime-local is timezone-dependent and
+    // computing it during SSR would mismatch hydration when the server TZ differs.
+    requestedStartTime: "",
     durationMinutes: data.durationMinutes === null ? "" : String(data.durationMinutes),
     locationText: data.locationText ?? "",
     fulfillmentMode: data.fulfillmentMode,
@@ -108,6 +109,16 @@ export function IntentCard({
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [pending, startTransition] = useTransition();
+
+  // Populate the timezone-dependent datetime-local value only after mount to
+  // avoid an SSR/client hydration mismatch. Re-syncs after a save+refresh
+  // changes the persisted time; never clobbers an in-progress, unsaved edit.
+  useEffect(() => {
+    setForm((prev) => ({
+      ...prev,
+      requestedStartTime: isoToLocalInput(data.requestedStartTimeISO),
+    }));
+  }, [data.requestedStartTimeISO]);
 
   const highlighted = new Set(
     highlightFields.map((f) => MISSING_FIELD_TO_INPUT[f]),
