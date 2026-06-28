@@ -37,24 +37,52 @@ export type ParsedIntentDTO = z.infer<typeof parsedIntentSchema>;
 // The structured completion form for mandatory blockers. Submitted by the user
 // on the Intent Creation page. Optional "improve your offers" fields are
 // included but never required by the activation gate.
-export const intentCompletionSchema = z.object({
-  serviceType: z.string().min(1).max(120).optional(),
-  requestedStartTime: z.string().datetime().optional(),
-  durationMinutes: z.number().int().min(15).max(600).optional(),
-  locationText: z.string().min(1).max(280).optional(),
-  useCurrentLocation: z.boolean().optional(),
-  latitude: z.number().min(-90).max(90).optional(),
-  longitude: z.number().min(-180).max(180).optional(),
-  fulfillmentMode: fulfillmentModeSchema.optional(),
-  // optional improve-offers fields
-  budgetMin: senSchema.optional(),
-  budgetMax: senSchema.optional(),
-  travelRadiusKm: z.number().min(0).max(100).optional(),
-  flexibilityTimeMinutes: z.number().int().min(0).max(480).optional(),
-  flexibilityBudgetPercent: z.number().int().min(0).max(100).optional(),
-  flexibilityTravelKm: z.number().min(0).max(100).optional(),
-  preferences: intentPreferencesSchema.optional(),
+const intentCompletionPreferencesSchema = intentPreferencesSchema.extend({
+  therapistGender: z.enum(["male", "female", "any"]).nullable().optional(),
+  pressureStyle: z.string().max(120).nullable().optional(),
 });
+
+export const intentCompletionSchema = z
+  .object({
+    serviceType: z.string().min(1).max(120).nullable().optional(),
+    requestedStartTime: z.string().datetime().nullable().optional(),
+    durationMinutes: z.number().int().min(15).max(600).nullable().optional(),
+    locationText: z.string().min(1).max(280).nullable().optional(),
+    useCurrentLocation: z.boolean().optional(),
+    latitude: z.number().min(-90).max(90).nullable().optional(),
+    longitude: z.number().min(-180).max(180).nullable().optional(),
+    fulfillmentMode: fulfillmentModeSchema.optional(),
+    // optional improve-offers fields
+    budgetMin: senSchema.nullable().optional(),
+    budgetMax: senSchema.nullable().optional(),
+    travelRadiusKm: z.number().min(0).max(100).nullable().optional(),
+    flexibilityTimeMinutes: z
+      .number()
+      .int()
+      .min(0)
+      .max(480)
+      .nullable()
+      .optional(),
+    flexibilityBudgetPercent: z
+      .number()
+      .int()
+      .min(0)
+      .max(100)
+      .nullable()
+      .optional(),
+    flexibilityTravelKm: z.number().min(0).max(100).nullable().optional(),
+    preferences: intentCompletionPreferencesSchema.optional(),
+  })
+  .refine(
+    (data) =>
+      data.budgetMin == null ||
+      data.budgetMax == null ||
+      data.budgetMin <= data.budgetMax,
+    {
+      message: "Budget minimum cannot be greater than budget maximum",
+      path: ["budgetMax"],
+    },
+  );
 export type IntentCompletionInput = z.infer<typeof intentCompletionSchema>;
 
 // A normalized intent snapshot used by missing-field detection and matching.

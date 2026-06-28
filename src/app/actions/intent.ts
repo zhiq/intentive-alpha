@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireSession } from "@/lib/auth";
 import {
@@ -9,6 +10,7 @@ import {
 } from "@/services";
 import { rawIntentInputSchema } from "@/domain/schema/intent";
 import { DomainError } from "@/domain/errors";
+import { formDataToCompletionInput } from "./intentCompletionForm";
 
 export interface ActionState {
   error?: string;
@@ -53,7 +55,28 @@ export async function applyCompletionAction(
   }
 }
 
-export async function activateIntentAction(intentId: string) {
+export async function updateIntentCardAction(
+  intentId: string,
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const input = formDataToCompletionInput(formData);
+  const result = await applyCompletionAction(intentId, input);
+  if (!result.error) revalidatePath(`/intents/${intentId}`);
+  return result;
+}
+
+export async function activateIntentCardAction(
+  intentId: string,
+  _prev: ActionState,
+  _formData: FormData,
+): Promise<ActionState> {
+  return activateIntentAction(intentId);
+}
+
+export async function activateIntentAction(
+  intentId: string,
+): Promise<ActionState> {
   const session = await requireSession();
   let liveOk = false;
   try {
@@ -63,6 +86,7 @@ export async function activateIntentAction(intentId: string) {
     return { error: toMessage(err) };
   }
   if (liveOk) redirect(`/intents/${intentId}/live`);
+  return {};
 }
 
 function toMessage(err: unknown): string {
