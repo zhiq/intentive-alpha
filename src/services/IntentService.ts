@@ -56,31 +56,51 @@ export const IntentService = {
     }
     const c = parsed.data;
 
-    const mergedPreferences = {
-      ...(intent.preferencesJson as Record<string, unknown>),
-      ...(c.preferences ?? {}),
-    };
+    const mergedPreferences = mergePreferences(
+      intent.preferencesJson as Record<string, unknown>,
+      c.preferences ?? {},
+    );
 
     const data: Prisma.IntentObjectUpdateInput = {
-      serviceType: c.serviceType ?? intent.serviceType,
-      requestedStartTime: c.requestedStartTime
-        ? new Date(c.requestedStartTime)
+      serviceType: valueOrExisting(c, "serviceType", intent.serviceType),
+      requestedStartTime: hasOwn(c, "requestedStartTime")
+        ? c.requestedStartTime
+          ? new Date(c.requestedStartTime)
+          : null
         : intent.requestedStartTime,
-      durationMinutes: c.durationMinutes ?? intent.durationMinutes,
+      durationMinutes: valueOrExisting(
+        c,
+        "durationMinutes",
+        intent.durationMinutes,
+      ),
       locationText: c.useCurrentLocation
         ? (c.locationText ?? "Current location")
-        : (c.locationText ?? intent.locationText),
-      latitude: c.latitude ?? intent.latitude,
-      longitude: c.longitude ?? intent.longitude,
+        : valueOrExisting(c, "locationText", intent.locationText),
+      latitude: valueOrExisting(c, "latitude", intent.latitude),
+      longitude: valueOrExisting(c, "longitude", intent.longitude),
       fulfillmentMode: c.fulfillmentMode ?? intent.fulfillmentMode,
-      budgetMin: c.budgetMin ?? intent.budgetMin,
-      budgetMax: c.budgetMax ?? intent.budgetMax,
-      travelRadiusKm: c.travelRadiusKm ?? intent.travelRadiusKm,
-      flexibilityTimeMinutes:
-        c.flexibilityTimeMinutes ?? intent.flexibilityTimeMinutes,
-      flexibilityBudgetPercent:
-        c.flexibilityBudgetPercent ?? intent.flexibilityBudgetPercent,
-      flexibilityTravelKm: c.flexibilityTravelKm ?? intent.flexibilityTravelKm,
+      budgetMin: valueOrExisting(c, "budgetMin", intent.budgetMin),
+      budgetMax: valueOrExisting(c, "budgetMax", intent.budgetMax),
+      travelRadiusKm: valueOrExisting(
+        c,
+        "travelRadiusKm",
+        intent.travelRadiusKm,
+      ),
+      flexibilityTimeMinutes: valueOrExisting(
+        c,
+        "flexibilityTimeMinutes",
+        intent.flexibilityTimeMinutes,
+      ),
+      flexibilityBudgetPercent: valueOrExisting(
+        c,
+        "flexibilityBudgetPercent",
+        intent.flexibilityBudgetPercent,
+      ),
+      flexibilityTravelKm: valueOrExisting(
+        c,
+        "flexibilityTravelKm",
+        intent.flexibilityTravelKm,
+      ),
       preferencesJson: mergedPreferences as Prisma.InputJsonValue,
     };
 
@@ -89,6 +109,11 @@ export const IntentService = {
     const duration = (data.durationMinutes as number | null | undefined) ?? null;
     if (start && duration) {
       data.requestedEndTime = new Date(start.getTime() + duration * 60_000);
+    } else if (
+      hasOwn(c, "requestedStartTime") ||
+      hasOwn(c, "durationMinutes")
+    ) {
+      data.requestedEndTime = null;
     }
 
     const updated = await prisma.intentObject.update({
@@ -174,3 +199,33 @@ export const IntentService = {
     );
   },
 };
+
+function hasOwn<T extends object, K extends PropertyKey>(
+  object: T,
+  key: K,
+): object is T & Record<K, unknown> {
+  return Object.prototype.hasOwnProperty.call(object, key);
+}
+
+function valueOrExisting<T extends object, K extends PropertyKey, V>(
+  object: T,
+  key: K,
+  existing: V,
+): V | null {
+  return hasOwn(object, key) ? (object[key] as V | null) : existing;
+}
+
+function mergePreferences(
+  existing: Record<string, unknown>,
+  updates: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged = { ...existing };
+  for (const [key, value] of Object.entries(updates)) {
+    if (value === null || value === undefined || value === "") {
+      delete merged[key];
+    } else {
+      merged[key] = value;
+    }
+  }
+  return merged;
+}
