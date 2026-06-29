@@ -10,10 +10,15 @@ import {
 } from "@/services";
 import { rawIntentInputSchema } from "@/domain/schema/intent";
 import { DomainError } from "@/domain/errors";
+import { MissingFieldService } from "@/services/MissingFieldService";
+import type { IntentStatus, MandatoryField } from "@/domain/enums";
 import { formDataToCompletionInput } from "./intentCompletionForm";
 
 export interface ActionState {
   error?: string;
+  ok?: boolean;
+  status?: IntentStatus;
+  remainingBlockers?: MandatoryField[];
 }
 
 // Server action: parse a raw intent and route to its completion page.
@@ -48,8 +53,18 @@ export async function applyCompletionAction(
 ): Promise<ActionState> {
   const session = await requireSession();
   try {
-    await IntentService.applyCompletion(intentId, session.userId, input);
-    return {};
+    const intent = await IntentService.applyCompletion(
+      intentId,
+      session.userId,
+      input,
+    );
+    const missing = MissingFieldService.detect(intent);
+    revalidatePath(`/intents/${intentId}`);
+    return {
+      ok: true,
+      status: intent.status,
+      remainingBlockers: missing.missing,
+    };
   } catch (err) {
     return { error: toMessage(err) };
   }
@@ -61,9 +76,7 @@ export async function updateIntentCardAction(
   formData: FormData,
 ): Promise<ActionState> {
   const input = formDataToCompletionInput(formData);
-  const result = await applyCompletionAction(intentId, input);
-  if (!result.error) revalidatePath(`/intents/${intentId}`);
-  return result;
+  return applyCompletionAction(intentId, input);
 }
 
 export async function activateIntentCardAction(
